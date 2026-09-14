@@ -1,0 +1,27 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local scrape caches and generated exports
+cache/
+overrides.json
+report.csv
+review.csv
+trakt-import.json
+unresolved.json
+
+# Local OS/editor files
+.DS_Store
+.idea/
+.vscode/
