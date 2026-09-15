@@ -92,7 +92,7 @@ Politique volontairement conservatrice : jamais d'application automatique sur un
 
 ## Audit complet
 
-La passe de croisement ne vérifie pas seulement les items en doute : elle audite **tous** les items « sûre » (durée, casting, réalisateur de la fiche AlloCiné vs métadonnées IMDb/TMDB du mapping retenu). Une décision d'arbitrage est prise uniquement avec ≥2 signaux forts concordants ; un mapping contredit (durée à 40 min, casting disjoint) est rétrogradé en revue. Les entrées strictement identiques sont dédoublonnées et les noms asiatiques sont gérés malgré l'ordre coréen/japonais inversé entre sources. Les décisions sont persistées dans `cache/cross.json` (sauvegarde incrémentale, runs reprenables) — le premier audit est le plus long, ensuite tout est rejoué depuis le cache.
+La passe de croisement ne vérifie pas seulement les items en doute : elle audite **tous** les items « sûre » (durée, casting, réalisateur de la fiche AlloCiné vs métadonnées IMDb/TMDB du mapping retenu). Une décision d'arbitrage est prise uniquement avec ≥2 signaux forts concordants ; un mapping contredit (casting disjoint, incohérences de métadonnées) est rétrogradé en revue. Les entrées strictement identiques sont dédoublonnées et les noms asiatiques sont gérés malgré l'ordre coréen/japonais inversé entre sources. Les décisions sont persistées dans `cache/cross.json` (sauvegarde incrémentale, runs reprenables) — le premier audit est le plus long, ensuite tout est rejoué depuis le cache.
 
 ## Limites connues
 
