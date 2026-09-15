@@ -111,6 +111,18 @@ La passe de croisement ne vérifie pas seulement les items en doute : elle audit
 - Le DOM d'AlloCiné peut changer : `--review` et les caches facilitent l'ajustement des sélecteurs
 - Le premier audit complet est long (durée variable selon la taille du profil et la vitesse des services) ; les runs suivants sont rapides grâce au cache
 
+## Avertissement légal
+
+- Cet outil est destiné à un **usage strictement personnel** : n'exportez que **votre propre profil** AlloCiné, jamais celui d'un tiers (les notes et le pseudo d'un profil sont des données personnelles).
+- Les [CGU d'AlloCiné](https://www.allocine.fr/service/conditions.html) (version du 16/05/2025) interdisent l'extraction et l'usage des données du site hors de sa consultation : « extraire, de manière substantielle ou non, et/ou utiliser en dehors de la consultation du Site, une quelconque donnée du Site » (art. 7.5), et « collecter ou stocker des données en vue de créer une base de données » (art. 8.1). **L'export automatisé décrit ici est donc en contradiction avec ces CGU** ; il en va de même des requêtes automatisées en volume (art. 8.1).
+- Conséquence possible : suspension ou clôture du compte AlloCiné, sans préavis (art. 9). L'utilisation de ce script se fait **sous votre seule responsabilité**.
+- La voie recommandée est de demander une autorisation écrite à AlloCiné (art. 7.5) : téléphone `+33 811 69 41 42` ou [formulaire de contact](https://www.allocine.fr/service/contact/).
+- Ce projet n'est ni affilié, ni approuvé, ni sponsorisé par AlloCiné/Webedia, Trakt, TMDB ou IMDb. « AlloCiné », « Trakt », « TMDB » et « IMDb » sont les marques de leurs propriétaires respectifs.
+
+## Licence
+
+MIT — voir [`LICENSE`](LICENSE).
+
 ## Développeurs
 
 Voir `AGENTS.md` pour les règles internes (sémantique du cache, règles d'arbitrage, quirks de scraping).
