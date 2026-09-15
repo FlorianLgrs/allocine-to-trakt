@@ -79,6 +79,16 @@ def log(msg):
     print(msg, flush=True)
 
 
+def get_questionary():
+    try:
+        import questionary
+    except ImportError as exc:
+        raise RuntimeError(
+            "La dépendance questionary manque. Relancez ./install.sh puis ./export.sh."
+        ) from exc
+    return questionary
+
+
 def normalize_title(s):
     if not s:
         return ""
@@ -124,6 +134,8 @@ def needs_review(it, reviewed_ok):
 
 
 def confidence_level(it, reviewed_ok):
+    if it.status == "excluded":
+        return "exclue"
     if it.status.startswith("unresolved") or it.status in ("imdb_error", "detail_error"):
         return "hors import" if not it.imdb_id else "à vérifier"
     if it.status in SAFE_STATUSES or it.tmdb_outcome == "confirm" or it.cross_validated:
@@ -150,6 +162,7 @@ def tmdb_find_imdb(session, key, imdb_id, kind_slug, delay):
 
 def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
     """Revue interactive des items en doute. Retourne True si des mappings ont changé."""
+    q = get_questionary()
     ok_path = cache_dir / "review-ok.json"
     reviewed_ok = load_json(ok_path, {})
     find_cache_path = cache_dir / "find.json"
@@ -190,10 +203,10 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
     todo = todo_sorted()
     log("\n===== REVUE INTERACTIVE =====")
     log(f"{len(todo)} item(s) en doute à examiner.")
-    log("Actions : [Entrée]=valider l'ID affiché | t=prendre la proposition TMDB |")
-    log("          k=garder l'ID IMDb initial (divergences) | i ttXXXXXXX=ID IMDb manuel |")
-    log("          v=chercher une correspondance via TMDB | e=exclure (validé sans mapping) |")
-    log("          s=passer | q=sauver et quitter")
+    log("Utilisez les flèches puis Entrée pour choisir une action.")
+    if not todo:
+        log("Aucun item à valider. L'export est déjà prêt.")
+        return changed
 
     idx = 0
     while idx < len(todo):
@@ -223,67 +236,78 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
                 + (f" — {sig}" if sig else ""))
         if it.url_path:
             log(f"  Allociné : {it.allocine_url}")
+        choices = []
+        if it.imdb_id:
+            choices.append(q.Choice("Valider le mapping actuel", value="validate"))
+        initial = next(
+            (c["imdb_id"] for c in (it.candidates or []) if c.get("type_imdb") == "imdb_suggestion"),
+            None,
+        )
+        if initial:
+            cl, cy = label_of(initial, it.kind_slug)
+            label = cl or initial
+            choices.append(q.Choice(f"Garder la proposition IMDb : {label} ({cy or '?'})", value="keep"))
+        alt = next((c for c in (it.candidates or []) if c.get("type_imdb") == "tmdb"), None)
+        if alt:
+            cl, cy = label_of(alt["imdb_id"], it.kind_slug)
+            label = cl or alt.get("titre") or alt["imdb_id"]
+            choices.append(q.Choice(f"Prendre la proposition TMDB : {label} ({cy or alt.get('annee') or '?'})", value="tmdb"))
+        choices.extend([
+            q.Choice("Saisir un ID IMDb manuellement", value="manual"),
+            q.Choice("Rechercher une correspondance avec TMDB", value="search"),
+            q.Choice("Exclure cet item de l'import", value="exclude"),
+            q.Choice("Passer cet item", value="skip"),
+            q.Choice("Quitter la revue et sauvegarder", value="quit"),
+        ])
         try:
-            raw = input("  action> ").strip()
-        except EOFError:
-            log("\n(fin d'entrée — sauvegarde)")
+            action = q.select("Que voulez-vous faire ?", choices=choices, instruction="↑↓ puis Entrée").ask()
+        except (EOFError, KeyboardInterrupt):
+            log("\n(fin de revue — sauvegarde)")
             break
-        action = raw.lower()
-
-        if action == "q":
+        if action in (None, "quit"):
             log("Sauvegarde…")
             break
-        if action == "s":
+        if action == "skip":
             idx += 1
             continue
-        if action == "" :
+        if action == "validate":
             if not it.imdb_id:
-                log("  (aucun ID à valider — utilisez k/t/i/v/e ou s)")
                 continue
             reviewed_ok[it.cache_key] = True
             it.reviewed = True
             save_json(ok_path, reviewed_ok)
             idx += 1
             continue
-        if action == "e":
+        if action == "exclude":
+            it.imdb_id = None
+            it.status = "excluded"
             it.reviewed = True
-            reviewed_ok[it.cache_key] = True
+            reviewed_ok[it.cache_key] = {"action": "exclude"}
             save_json(ok_path, reviewed_ok)
+            changed = True
             idx += 1
             continue
-        if action == "k":
-            initial = next(
-                (c["imdb_id"] for c in (it.candidates or []) if c.get("type_imdb") == "imdb_suggestion"),
-                None,
-            )
+        if action == "keep":
             if not initial:
                 log("  pas d'ID IMDb initial à conserver")
-                continue
-            cl, cy = label_of(initial, it.kind_slug)
-            if cl:
-                log(f"  {initial} pointe vers : « {cl} » ({cy})")
-            if input("  l'appliquer ? [o/N] ").strip().lower() != "o":
                 continue
             changed = apply_mapping(it, initial) or changed
             log(f"  → retenu : {initial}")
             idx += 1
             continue
-        if action == "t":
-            alt = next((c for c in (it.candidates or []) if c.get("type_imdb") == "tmdb"), None)
+        if action == "tmdb":
             if not alt:
                 log("  aucune proposition TMDB disponible — essayez 'v'")
                 continue
-            cl, cy = label_of(alt["imdb_id"], it.kind_slug)
-            t_label = cl or alt.get("titre")
-            log(f"  {alt['imdb_id']} pointe vers : « {t_label} » ({cy or alt.get('annee')})")
-            if input("  l'appliquer ? [o/N] ").strip().lower() != "o":
-                continue
             changed = apply_mapping(it, alt["imdb_id"]) or changed
-            log(f"  → retenu : {alt['imdb_id']} « {t_label} »")
+            log(f"  → retenu : {alt['imdb_id']}")
             idx += 1
             continue
-        if action == "i":
-            new_id = input("  ID IMDb (tt…) : ").strip()
+        if action == "manual":
+            new_id = q.text("ID IMDb (tt…) :").ask()
+            if new_id is None:
+                break
+            new_id = new_id.strip().lower()
             if not IMDB_ID_RE.fullmatch(new_id):
                 log("  format d'ID invalide")
                 continue
@@ -296,12 +320,19 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
                     log(f"  ce pointe vers : « {r['title']} » ({r['year']})")
                 else:
                     log("  introuvable dans TMDB")
-                    if input("  l'appliquer quand même ? [o/N] ").strip().lower() != "o":
+                    decision = q.select(
+                        "Appliquer malgré l'absence dans TMDB ?",
+                        choices=[
+                            q.Choice("Appliquer cet ID", value=True),
+                            q.Choice("Annuler", value=False),
+                        ],
+                    ).ask()
+                    if decision is not True:
                         continue
             changed = apply_mapping(it, new_id) or changed
             idx += 1
             continue
-        if action == "v":
+        if action == "search":
             if not tmdb_key:
                 log("  nécessite une clé TMDB")
                 continue
@@ -317,7 +348,14 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
             if it.imdb_id == new_id:
                 log("  (identique à l'ID courant — pas de changement)")
                 continue
-            if input("  l'appliquer ? [o/N] ").strip().lower() == "o":
+            decision = q.select(
+                "Appliquer cette proposition ?",
+                choices=[
+                    q.Choice("Appliquer cette correspondance", value=True),
+                    q.Choice("Retourner au menu", value=False),
+                ],
+            ).ask()
+            if decision is True:
                 changed = apply_mapping(it, new_id) or changed
                 idx += 1
             continue
@@ -351,6 +389,92 @@ def load_env_file(path):
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip().strip('"').strip("'")
     return env
+
+
+def store_tmdb_key(path, key):
+    """Ajoute/remplace TMDB_API_KEY sans afficher ni écraser les autres variables."""
+    lines = []
+    if path.is_file():
+        lines = path.read_text(encoding="utf-8").splitlines()
+    replaced = False
+    output = []
+    for line in lines:
+        if line.strip().startswith("TMDB_API_KEY="):
+            output.append(f"TMDB_API_KEY={key}")
+            replaced = True
+        else:
+            output.append(line)
+    if not replaced:
+        output.append(f"TMDB_API_KEY={key}")
+    path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+    path.chmod(0o600)
+
+
+def run_wizard(args):
+    """Collecte les paramètres courants sans exposer les options internes du script."""
+    q = get_questionary()
+    env_path = Path(__file__).resolve().parent / ".env"
+    env = load_env_file(env_path)
+    print("\n=== Export AlloCiné → Trakt ===", flush=True)
+    print("Les données restent sur votre ordinateur. Le profil AlloCiné doit être public.\n", flush=True)
+
+    url = args.url or ""
+    while not MEMBER_RE.search(url):
+        url = q.text("URL du profil AlloCiné :").ask()
+        if url is None:
+            raise EOFError
+        url = url.strip()
+        if url and not re.match(r"^https?://", url):
+            url = "https://" + url
+        if not MEMBER_RE.search(url):
+            print("URL invalide : utilisez une URL de type https://www.allocine.fr/membre-Z.../", flush=True)
+    args.url = url
+
+    if args.date is None:
+        raw_date = q.text("Date d'import (AAAA-MM-JJ, Entrée = aujourd'hui) :", default="").ask()
+        if raw_date is None:
+            raise EOFError
+        raw_date = raw_date.strip()
+        if raw_date:
+            args.date = raw_date
+
+    if args.kinds == "films,series":
+        kinds = q.select(
+            "Que voulez-vous exporter ?",
+            choices=[
+                q.Choice("Films et séries", value="films,series"),
+                q.Choice("Films uniquement", value="films"),
+                q.Choice("Séries uniquement", value="series"),
+            ],
+        ).ask()
+        if kinds is None:
+            raise EOFError
+        args.kinds = kinds
+
+    if not args.tmdb_key and not env.get("TMDB_API_KEY"):
+        key = q.password("Clé TMDB facultative (laisser vide pour continuer sans) :").ask()
+        if key is None:
+            raise EOFError
+        key = key.strip()
+        if key:
+            store_tmdb_key(env_path, key)
+            args.tmdb_key = str(env_path)
+            print("Clé TMDB enregistrée localement dans .env.", flush=True)
+    elif env.get("TMDB_API_KEY"):
+        print("Clé TMDB détectée dans .env.", flush=True)
+
+    if not args.review:
+        review = q.select(
+            "Lancer la validation interactive après l'export ?",
+            choices=[
+                q.Choice("Oui, valider les items en doute", value=True),
+                q.Choice("Non, générer uniquement l'export", value=False),
+            ],
+        ).ask()
+        if review is None:
+            raise EOFError
+        args.review = review
+    return args
 
 
 ITEM_CACHE_FIELDS = ("kind_slug", "allocine_id", "title", "url_path", "rating_xx", "rating")
@@ -1414,7 +1538,7 @@ def write_review_list(items, path, reviewed_ok):
 def write_unresolved(items, path):
     data = []
     for it in items:
-        if it.status.startswith("unresolved") or it.status == "detail_error":
+        if it.status.startswith("unresolved") or it.status in ("detail_error", "excluded"):
             data.append({
                 "type": it.kind,
                 "allocine_id": it.allocine_id,
@@ -1458,7 +1582,7 @@ def parse_args(argv):
         description="Export des notes Allociné d'un profil public vers un JSON importable sur Trakt.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--url", required=True, help="URL du profil Allociné (ex. https://www.allocine.fr/membre-Z.../)")
+    p.add_argument("--url", default=None, help="URL du profil Allociné (absente : assistant interactif)")
     p.add_argument("--date", default=None, help="date fixe watched_at/rated_at, AAAA-MM-JJ (défaut : aujourd'hui UTC)")
     p.add_argument("--delay", type=float, default=1.2, help="délai entre requêtes fiches Allociné (s)")
     p.add_argument("--delay-imdb", type=float, default=0.3, help="délai entre requêtes IMDb (s)")
@@ -1466,11 +1590,12 @@ def parse_args(argv):
     p.add_argument("--kinds", default="films,series", help="listes à exporter : films,series")
     p.add_argument("--max-pages", type=int, default=0, help="limiter le nombre de pages par type (0 = tout)")
     p.add_argument("--limit", type=int, default=0, help="limiter le nombre d'items traités (0 = tout)")
-    p.add_argument("--overrides", default=None, help="JSON {\"films-135063\": \"tt1234567\"} : mappings manuels")
+    p.add_argument("--overrides", default=None, help="JSON de mappings manuels (créé automatiquement s'il manque)")
     p.add_argument("--tmdb-key", default=None, help="clé API TMDB (v3) : chaîne, chemin de fichier, ou TMDB_API_KEY dans .env")
     p.add_argument("--delay-tmdb", type=float, default=0.25, help="délai entre requêtes TMDB (s)")
     p.add_argument("--no-tmdb-check", action="store_true", help="désactiver la contre-vérification TMDB (fallback seul)")
     p.add_argument("--refresh-scrape", action="store_true", help="re-scraper le profil au lieu d'utiliser le cache des items")
+    p.add_argument("--wizard", action="store_true", help="assistant interactif de premier lancement")
     p.add_argument("--review", action="store_true", help="revue interactive des items en doute (décisions persistées)")
     p.add_argument("--retry-unresolved", action="store_true", help="retenter les résolutions IMDb en échec")
     return p.parse_args(argv)
@@ -1478,6 +1603,11 @@ def parse_args(argv):
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.wizard or not args.url:
+        if not sys.stdin.isatty():
+            log("Erreur : aucune URL fournie. Utilisez --url en mode non interactif, ou lancez le programme dans un terminal.")
+            return 2
+        args = run_wizard(args)
     member_m = MEMBER_RE.search(args.url or "")
     if not member_m:
         log("Erreur : URL de profil Allociné invalide (attendu .../membre-ZXXXX.../)")
@@ -1501,13 +1631,12 @@ def main(argv=None):
     (cache_dir / "detail").mkdir(parents=True, exist_ok=True)
     imdb_cache_path = cache_dir / "imdb.json"
 
-    overrides = {}
-    if args.overrides:
-        opath = Path(args.overrides)
-        if not opath.is_file():
-            log(f"Erreur : fichier d'overrides introuvable : {opath}")
-            return 1
-        overrides = json.loads(opath.read_text(encoding="utf-8"))
+    overrides_path = Path(args.overrides) if args.overrides else out_dir / "overrides.json"
+    overrides_path.parent.mkdir(parents=True, exist_ok=True)
+    overrides = load_json(overrides_path, {})
+    if not overrides_path.is_file():
+        save_json(overrides_path, overrides, indent=2)
+        log(f"Fichier de mappings créé : {overrides_path}")
 
     imdb_cache = {}
     if imdb_cache_path.is_file():
@@ -1540,8 +1669,19 @@ def main(argv=None):
     if args.limit:
         items = items[: args.limit]
 
+    review_decisions = load_json(cache_dir / "review-ok.json", {})
+    for it in items:
+        decision = review_decisions.get(it.cache_key)
+        if isinstance(decision, dict) and decision.get("action") == "exclude":
+            it.imdb_id = None
+            it.status = "excluded"
+            it.reviewed = True
+
     n = len(items)
+    log(f"\nPhase 1/5 — résolution locale de {n} item(s) (cache réutilisé quand disponible)")
     for i, it in enumerate(items, 1):
+        if it.status == "excluded":
+            continue
         try:
             enrich_item(session, it, cache_dir, args.delay)
         except (requests.RequestException, RuntimeError) as e:
@@ -1552,6 +1692,7 @@ def main(argv=None):
             log(f"[{i}/{n}] traités — statuts : {dict(Counter(x.status for x in items))}")
 
     # ---- TMDB : fallback sur les non résolus + contre-vérification ----
+    log("\nPhase 2/5 — vérifications TMDB")
     env = load_env_file(Path(__file__).resolve().parent / ".env")
     tmdb_key = args.tmdb_key or env.get("TMDB_API_KEY")
     if tmdb_key:
@@ -1641,7 +1782,9 @@ def main(argv=None):
             log(f"TMDB : confirmés={confirmed}, divergences={mismatched} (à revoir ci-dessous)")
 
     # ---- Croisement signaux Allociné (JSON-LD) vs candidats, puis Wikidata ----
+    log("\nPhase 3/5 — recherche de derniers mappings via Wikidata")
     wikidata_pass(session, items, cache_dir, args.delay_tmdb)
+    log("\nPhase 4/5 — audit durée, casting et réalisateur")
     cross_verify_pass(session, items, cache_dir, args.delay, args.delay_imdb, tmdb_key, args.delay_tmdb)
 
     reviewed_ok = load_json(cache_dir / "review-ok.json", {})
@@ -1656,10 +1799,10 @@ def main(argv=None):
         write_review_list(items, out_dir / "review.csv", reviewed_ok)
         return entries, errors
 
+    log("\nPhase 5/5 — génération des fichiers")
     entries, errors = write_outputs()
 
     if args.review:
-        overrides_path = args.overrides or (out_dir / "overrides.json")
         run_review(session, items, tmdb_key, cache_dir, overrides_path, args.delay_tmdb)
         reviewed_ok = load_json(cache_dir / "review-ok.json", {})
         entries, errors = write_outputs()
@@ -1676,16 +1819,30 @@ def main(argv=None):
         log(f"VALIDATION : {len(errors)} erreur(s)")
         for e in errors[:10]:
             log(f"  - {e}")
+        log("N'importez pas le fichier tant que la validation n'est pas OK.")
     else:
         log("VALIDATION : OK (IDs, dates, notes, unicité)")
     n_review = sum(1 for it in items if needs_review(it, reviewed_ok))
     if n_review:
         log(f"\nÀ valider : {n_review} item(s) en doute → review.csv, ou revue interactive :")
-        log("  .venv/bin/python allocine_to_trakt.py --url ... --review")
+        log(f"  .venv/bin/python allocine_to_trakt.py --url \"{args.url}\" --overrides \"{overrides_path}\" --review")
+    elif not errors:
+        log("\nEXPORT PRÊT : importez trakt-import.json dans Trakt → Réglages → Importer.")
     log(f"\nFichiers : {out_dir / 'trakt-import.json'}, {out_dir / 'report.csv'}, "
         f"{out_dir / 'unresolved.json'}, {out_dir / 'review.csv'}")
     return 1 if errors else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nInterruption reçue. Les caches permettent de reprendre avec la même commande.", flush=True)
+        sys.exit(130)
+    except EOFError:
+        print("\nAssistant interrompu. Relancez ./export.sh pour recommencer.", flush=True)
+        sys.exit(130)
+    except (requests.RequestException, RuntimeError) as exc:
+        print(f"\nErreur réseau ou d'exécution : {exc}", flush=True)
+        print("Relancez la même commande ; les étapes déjà terminées sont conservées dans cache/.", flush=True)
+        sys.exit(1)

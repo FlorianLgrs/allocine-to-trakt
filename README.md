@@ -5,40 +5,48 @@ Exporte les notes de films et séries d'un profil public AlloCiné vers un JSON 
 - Lit les onglets *films notés* / *séries notées* d'un profil public AlloCiné (titre, note /5, fiche)
 - Convertit les notes (0,5–5 → entier 1–10), résout chaque item vers son **ID IMDb** (sans clé, via l'API publique de suggestion IMDb), et recoupe chaque mapping avec TMDB + la durée/le casting/le réalisateur de la fiche AlloCiné
 - Génère `trakt-import.json` prêt à importer sur [trakt.tv](https://trakt.tv) (Réglages → Importer), plus des fichiers de contrôle (`report.csv`, `review.csv`, `unresolved.json`)
-- Tout est caché : le premier run est le seul long, ensuite chaque run rejoue depuis le cache
+- Tout est caché : seul le premier audit est long (durée variable selon la taille du profil et la vitesse des services) ; les runs suivants rejouent depuis le cache
 
-## Installation
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
-
-## Utilisation
+## Démarrage rapide
 
 ```bash
-.venv/bin/python allocine_to_trakt.py --url "https://www.allocine.fr/membre-ZXXXXXXXXXXXXXXXXXXX/" --overrides overrides.json
+./install.sh
+./export.sh
 ```
 
-Le profil doit être **public** (URL récupérable sur mon.allocine.fr → Profil).
+Le premier lancement ouvre un assistant qui demande l'URL du profil, la date fixe, la clé TMDB facultative et propose de lancer la revue interactive. Le profil Allociné doit être **public**.
+
+Les lancements suivants réutilisent automatiquement les caches.
+
+## Utilisation avancée
+
+```bash
+.venv/bin/python allocine_to_trakt.py --url "https://www.allocine.fr/membre-ZXXXXXXXXXXXXXXXXXXX/"
+```
+
+`overrides.json` est créé automatiquement s'il n'existe pas. Pour lancer explicitement l'assistant :
+
+```bash
+./export.sh --wizard
+```
 
 ### Revue interactive
 
 ```bash
-.venv/bin/python allocine_to_trakt.py --url "..." --overrides overrides.json --review
+./export.sh --review
 ```
 
-Présente uniquement les items en doute, du plus risqué au moins risqué, avec les candidats alternatifs et leurs signaux (durée, acteurs communs, réalisateur) :
+Présente uniquement les items en doute, du plus risqué au moins risqué, avec les candidats alternatifs et leurs signaux (durée, acteurs communs, réalisateur). Utilisez les flèches haut/bas puis `Entrée` :
 
-| Action | Effet |
+| Option du menu | Effet |
 |---|---|
-| `Entrée` | valider l'ID affiché |
-| `k` | garder l'ID IMDb initial (divergences IMDb/TMDB) |
-| `t` | prendre la proposition TMDB |
-| `i ttXXXXXXX` | ID IMDb manuel (vérifié via TMDB avant application) |
-| `v` | chercher une correspondance via TMDB à la demande |
-| `e` | exclure définitivement (validé sans mapping) |
-| `s` / `q` | passer / sauvegarder et quitter (reprise possible) |
+| Valider le mapping actuel | conserver l'ID affiché |
+| Garder la proposition IMDb | choisir l'alternative IMDb affichée |
+| Prendre la proposition TMDB | choisir l'alternative TMDB affichée |
+| Saisir un ID IMDb manuellement | saisir `ttXXXXXXX`, vérifié via TMDB |
+| Rechercher une correspondance avec TMDB | lancer une recherche supplémentaire |
+| Exclure cet item de l'import | retirer réellement l'item du JSON |
+| Passer / Quitter | reprendre plus tard ou sauvegarder |
 
 Les décisions sont persistées (`cache/review-ok.json`, remplacements dans `overrides.json`) : les items validés ne se représentent plus.
 
@@ -47,12 +55,13 @@ Les décisions sont persistées (`cache/review-ok.json`, remplacements dans `ove
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--date AAAA-MM-JJ` | aujourd'hui (12:00 UTC) | date fixe `watched_at`/`rated_at` — AlloCiné ne stocke aucune date de note |
+| `--wizard` | — | assistant de premier lancement |
 | `--refresh-scrape` | — | re-scraper le profil (sinon `cache/items-*.json` est réutilisé : nécessaire si vous avez noté des films depuis) |
 | `--delay` / `--delay-imdb` / `--delay-tmdb` | 1,2 / 0,3 / 0,25 s | délais anti-429 (relances automatiques avec backoff) |
 | `--kinds films,series` | les deux | listes à exporter |
 | `--overrides` | — | fichier de mappings manuels, prioritaires sur tout |
 
-La clé TMDB (optionnelle mais recommandée) va dans `.env` :
+La clé TMDB est facultative mais améliore le matching. Copiez `.env.example` vers `.env` et renseignez-la, ou laissez l'assistant vous la demander :
 
 ```
 TMDB_API_KEY=votre_clé
@@ -69,7 +78,7 @@ Aucune autre clé n'est nécessaire (IMDb et Wikidata sont publics).
 | `review.csv` | uniquement les items en doute, triés par risque |
 | `unresolved.json` | détail des items sans mapping retenu (candidats, raison) |
 
-Le cache vit dans `cache/` (profil, fiches, résolutions IMDb/TMDB, décisions d'arbitrage) — supprimer un fichier de cache change les décisions, voir `AGENTS.md`.
+Le cache vit dans `cache/` (profil, fiches, résolutions IMDb/TMDB, décisions d'arbitrage). Les décisions sont sauvegardées progressivement : une interruption permet de reprendre. Supprimer un fichier de cache change les décisions, voir `AGENTS.md`.
 
 ## Modèle de confiance
 
@@ -100,6 +109,7 @@ La passe de croisement ne vérifie pas seulement les items en doute : elle audit
 - Les notes sans date : toutes les dates valent `--date` (pas de date de note sur AlloCiné)
 - Les items absents d'IMDb restent hors import (`unresolved.json`), l'import Trakt exigeant un `imdb_id`
 - Le DOM d'AlloCiné peut changer : `--review` et les caches facilitent l'ajustement des sélecteurs
+- Le premier audit complet est long (durée variable selon la taille du profil et la vitesse des services) ; les runs suivants sont rapides grâce au cache
 
 ## Développeurs
 

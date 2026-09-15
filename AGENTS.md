@@ -5,12 +5,15 @@ Single-script tool: exports a public Allociné profile's movie/series ratings in
 ## Run
 
 ```bash
-.venv/bin/python allocine_to_trakt.py --url "https://www.allocine.fr/membre-ZXXXX/" --overrides overrides.json [--review]
+./install.sh
+./export.sh
 ```
 
+- With no arguments, `export.sh` launches the interactive wizard; scripted runs can pass `--url` directly.
+- `overrides.json` is created automatically; `--overrides` is optional.
 - Always use `.venv/bin/python`, never system `python3` (its SSL certs are broken on this machine — `urllib`/pip fail; `requests` inside the venv bundles certifi).
-- Fresh full run is the only slow one; every later run replays from caches.
-- `--review`: interactive terminal walk-through of items in doubt (Enter=validate, k=keep IMDb initial, t=TMDB proposal, `i tt…`=manual ID, v=TMDB search, e=exclude, s=skip, q=quit). Decisions persist to `cache/review-ok.json` + `overrides.json`.
+- The first complete audit is the slow one (duration depends on profile size and remote service speed); later runs replay from caches.
+- `--review`: interactive terminal walk-through with arrow-key radio menus (validate, choose IMDb/TMDB proposal, enter a manual ID, search TMDB, exclude, skip, quit). Decisions persist to `cache/review-ok.json` + `overrides.json`.
 - `--refresh-scrape`: force re-scraping the profile (otherwise `cache/items-*.json` is reused, so new Allociné ratings need this flag).
 - `--date YYYY-MM-JJ` sets the fixed `watched_at`/`rated_at` (default: today, 12:00 UTC). Allociné stores no rating dates, so all dates are this fixed value.
 
@@ -29,7 +32,7 @@ Single-script tool: exports a public Allociné profile's movie/series ratings in
 | `tmdb.json` / `tmdbmeta.json` / `find.json` | TMDB cross-checks, candidate runtime/cast/director, imdb→TMDB lookups |
 | `cross.json` | auto-arbitration decisions — **replayed every run; delete a key (or the file) to re-decide** |
 | `wikidata.json` | last-resort P345 resolutions |
-| `review-ok.json` | items the human validated |
+| `review-ok.json` | human decisions (`validated` / `exclude`) |
 
 Deleting a cache changes outcomes. The scoring engine caches are: `imdbcands.json`, `tmdbmeta.json`, `cross.json` (purge these, not `imdb.json`, to re-arbitrate).
 
@@ -42,7 +45,7 @@ Deleting a cache changes outcomes. The scoring engine caches are: `imdbcands.jso
 - Margin is computed against **credible competitors only** (année within ±1 of the Allociné year); a candidate years apart is not the film being looked up.
 - Resolution order in `main()`: IMDb cascade → TMDB fallback → TMDB check → **Wikidata** → **cross pass (doubt items + audit of every other item)**. Wikidata runs before the cross pass so its resolutions get duration/cast verification; items with no Allociné credits get `cross.json` action `skip` (never re-fetched).
 - `cross.json` is saved incrementally every 25 items (runs are killable/resumable); statuses are replayed, not recomputed.
-- Statuses: `ok`, `ok_cross`, `ok_wikidata`, `ok_tmdb` (weak: `ok_year_only`/`ok_year_near`/`ok_year_adjusted` unless TMDB-confirmed or cross-validated), `override` (human, wins over everything), `unresolved_*` (excluded from import).
+- Statuses: `ok`, `ok_cross`, `ok_wikidata`, `ok_tmdb` (weak: `ok_year_only`/`ok_year_near`/`ok_year_adjusted` unless TMDB-confirmed or cross-validated), `override` (human, wins over everything), `excluded`, `unresolved_*` (excluded from import).
 - Expected end state: `VALIDATION : OK`, unique `(type, imdb_id)`, ratings 1–10 (Allociné /5 × 2), strictly identical duplicate entries deduped.
 
 ## Allociné scraping quirks
