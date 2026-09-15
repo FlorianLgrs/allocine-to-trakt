@@ -54,7 +54,7 @@ Deleting a cache changes outcomes. The scoring engine caches are: `imdbcands.jso
 - Some card links are obfuscated: CSS class starting with `ACr` + base64 of the URL path (strip every `ACr` substring, then b64decode, validate `/film/` or `/series/` prefix).
 - Rating lives in the card's CSS class `rating-mdl nXX` (XX/5, halves) → Trakt rating = XX × 2 / 10.
 - Movie detail pages carry duration/actors/director in `application/ld+json` (@type Movie). **Series JSON-LD lacks them** — fall back to the `meta-body-direction` / `meta-body-actor` divs (`parse_body_credits`); actor text may sit inside obfuscated spans but is still plain text.
-- `/critiques/...` pages redirect (this profile has none) — there is genuinely no date data.
+- `/critiques/...` pages redirect when a profile has no reviews — there is genuinely no date data.
 
 ## Resolution sources (no key for IMDb)
 
