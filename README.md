@@ -63,7 +63,7 @@ Les décisions sont persistées (`cache/review-ok.json`, remplacements dans `ove
 | `--tmdb-key` | `.env` | clé API TMDB (chaîne, chemin de fichier, ou `TMDB_API_KEY`) |
 | `--output-dir` | `.` | dossier des sorties et du cache |
 | `--no-tmdb-check` | — | désactiver la contre-vérification TMDB (fallback seul) |
-| `--retry-unresolved` | — | purger les échecs des caches (`imdb.json`, `tmdb.json`, `cross.json`) pour les retenter |
+| `--retry-unresolved` | — | purger les échecs des caches (`imdb.json`, `tmdb.json`, `cross.json`, y compris divergences TMDB et conflits d'arbitrage) pour les retenter |
 | `--max-pages` / `--limit` | 0 | outils de debug : limiter les pages/l'items traités (un `--limit` produit un export partiel) |
 
 La clé TMDB est facultative mais améliore le matching. Copiez `.env.example` vers `.env` et renseignez-la, ou laissez l'assistant vous la demander :

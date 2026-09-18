@@ -689,7 +689,7 @@ def enrich_item(session, item, cache_dir, delay):
     d = load_json(cpath, {})
     if d.get("not_found"):
         return
-    if not cpath.exists():
+    if not d:
         time.sleep(delay)
         r = http_get(session, item.allocine_url, not_found_ok=True)
         if r is None:
@@ -1635,21 +1635,23 @@ def main(argv=None):
 
     imdb_cache = load_json(imdb_cache_path, {})
     if args.retry_unresolved:
-        stale = [k for k, v in imdb_cache.items() if str(v.get("status", "")).startswith("unresolved")]
-        for k in stale:
-            del imdb_cache[k]
-        if stale:
-            save_json(imdb_cache_path, imdb_cache)
-        for name in ("tmdb.json", "cross.json"):
-            path = cache_dir / name
-            data = load_json(path, {})
-            removed = 0
-            for k in stale:
-                if data.pop(k, None) is not None:
-                    removed += 1
-            if removed:
+        tmdb_path, cross_path = cache_dir / "tmdb.json", cache_dir / "cross.json"
+        tmdb_cache, cross = load_json(tmdb_path, {}), load_json(cross_path, {})
+        stale = {k for k, v in imdb_cache.items() if str(v.get("status", "")).startswith("unresolved")}
+        stale |= {k for k, v in tmdb_cache.items() if v.get("check") == "mismatch"}
+        stale |= {k for k, v in cross.items() if v.get("action") == "downgrade"}
+        n_imdb = sum(1 for k in stale if imdb_cache.pop(k, None) is not None)
+        n_tmdb = sum(1 for k in stale if tmdb_cache.pop(k, None) is not None)
+        n_cross = sum(1 for k in stale if cross.pop(k, None) is not None)
+        for path, data, n in ((imdb_cache_path, imdb_cache, n_imdb),
+                              (tmdb_path, tmdb_cache, n_tmdb),
+                              (cross_path, cross, n_cross)):
+            if n:
                 save_json(path, data)
-        log(f"--retry-unresolved : {len(stale)} clé(s) purgée(s) de imdb.json, tmdb.json, cross.json")
+        if stale:
+            log(f"--retry-unresolved : {n_imdb} clé(s) imdb.json, {n_tmdb} tmdb.json, {n_cross} cross.json purgée(s)")
+        else:
+            log("--retry-unresolved : aucune clé en échec dans les caches")
 
     session = make_session()
 

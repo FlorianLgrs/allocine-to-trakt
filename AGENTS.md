@@ -34,7 +34,7 @@ Single-script tool: exports a public Allociné profile's movie/series ratings in
 | `wikidata.json` | last-resort P345 resolutions |
 | `review-ok.json` | human decisions (`validated` / `exclude`) |
 
-Deleting a cache changes outcomes. The scoring engine caches are: `imdbcands.json`, `tmdbmeta.json`, `cross.json` (purge these, not `imdb.json`, to re-arbitrate). `--retry-unresolved` drops `unresolved_*` keys from `imdb.json`, `tmdb.json` and `cross.json` (persisted immediately).
+Deleting a cache changes outcomes. The scoring engine caches are: `imdbcands.json`, `tmdbmeta.json`, `cross.json` (purge these, not `imdb.json`, to re-arbitrate). `--retry-unresolved` drops failed keys from all three sources (`unresolved_*` in `imdb.json`, TMDB `check: mismatch`, cross `action: downgrade`), persisted immediately.
 
 ## Decision rules (conservative, by design)
 
