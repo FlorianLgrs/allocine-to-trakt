@@ -17,8 +17,7 @@ Sorties (dans --output-dir) :
 
 Confiance : « sûre » = titre exact + année exacte (IMDb) ou confirmation TMDB croisée
 ou override manuel ; « à vérifier » = correspondance plus faible → revue --review.
-Revue interactive : --review (Entrée=valider, t/k=alternatives, i=ID manuel,
-v=recherche TMDB, e=exclure, s=passer, q=quitter ; décisions persistées).
+Revue interactive : --review (menus fléchés, décisions persistées).
 
 Notes Allociné converties : /5 en demi-points × 2 → entier 1..10.
 Aucune clé IMDb nécessaire (API publique de suggestion IMDb) ; TMDB optionnelle (.env).
@@ -71,10 +70,6 @@ class TmdbAuthError(Exception):
     pass
 
 
-class TmdbError(requests.RequestException):
-    pass
-
-
 def log(msg):
     print(msg, flush=True)
 
@@ -121,6 +116,10 @@ REVIEW_ORDER = [
 ]
 
 
+def review_sort_key(it):
+    return REVIEW_ORDER.index(it.status) if it.status in REVIEW_ORDER else 99
+
+
 def needs_review(it, reviewed_ok):
     if it.cache_key in reviewed_ok or it.reviewed:
         return False
@@ -137,7 +136,7 @@ def confidence_level(it, reviewed_ok):
     if it.status == "excluded":
         return "exclue"
     if it.status.startswith("unresolved") or it.status in ("imdb_error", "detail_error"):
-        return "hors import" if not it.imdb_id else "à vérifier"
+        return "hors import"
     if it.status in SAFE_STATUSES or it.tmdb_outcome == "confirm" or it.cross_validated:
         return "sûre"
     if it.cache_key in reviewed_ok or it.reviewed:
@@ -161,14 +160,13 @@ def tmdb_find_imdb(session, key, imdb_id, kind_slug, delay):
 
 
 def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
-    """Revue interactive des items en doute. Retourne True si des mappings ont changé."""
+    """Revue interactive des items en doute, décisions persistées."""
     q = get_questionary()
     ok_path = cache_dir / "review-ok.json"
     reviewed_ok = load_json(ok_path, {})
     find_cache_path = cache_dir / "find.json"
     find_cache = load_json(find_cache_path, {})
     overrides = load_json(Path(overrides_path), {})
-    changed = False
 
     def label_of(imdb_id, kind_slug):
         if not imdb_id:
@@ -197,7 +195,7 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
 
     def todo_sorted():
         todo = [it for it in items if needs_review(it, reviewed_ok)]
-        todo.sort(key=lambda it: REVIEW_ORDER.index(it.status) if it.status in REVIEW_ORDER else 99)
+        todo.sort(key=review_sort_key)
         return todo
 
     todo = todo_sorted()
@@ -206,7 +204,7 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
     log("Utilisez les flèches puis Entrée pour choisir une action.")
     if not todo:
         log("Aucun item à valider. L'export est déjà prêt.")
-        return changed
+        return
 
     idx = 0
     while idx < len(todo):
@@ -284,14 +282,13 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
             it.reviewed = True
             reviewed_ok[it.cache_key] = {"action": "exclude"}
             save_json(ok_path, reviewed_ok)
-            changed = True
             idx += 1
             continue
         if action == "keep":
             if not initial:
                 log("  pas d'ID IMDb initial à conserver")
                 continue
-            changed = apply_mapping(it, initial) or changed
+            apply_mapping(it, initial)
             log(f"  → retenu : {initial}")
             idx += 1
             continue
@@ -299,7 +296,7 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
             if not alt:
                 log("  aucune proposition TMDB disponible — essayez 'v'")
                 continue
-            changed = apply_mapping(it, alt["imdb_id"]) or changed
+            apply_mapping(it, alt["imdb_id"])
             log(f"  → retenu : {alt['imdb_id']}")
             idx += 1
             continue
@@ -329,7 +326,7 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
                     ).ask()
                     if decision is not True:
                         continue
-            changed = apply_mapping(it, new_id) or changed
+            apply_mapping(it, new_id)
             idx += 1
             continue
         if action == "search":
@@ -356,13 +353,12 @@ def run_review(session, items, tmdb_key, cache_dir, overrides_path, delay_tmdb):
                 ],
             ).ask()
             if decision is True:
-                changed = apply_mapping(it, new_id) or changed
+                apply_mapping(it, new_id)
                 idx += 1
             continue
         log("  action inconnue")
 
     save_json(ok_path, reviewed_ok)
-    return changed
 
 
 def decode_obfuscated_link(cls):
@@ -477,11 +473,9 @@ def run_wizard(args):
     return args
 
 
-ITEM_CACHE_FIELDS = ("kind_slug", "allocine_id", "title", "url_path", "rating_xx", "rating")
-
-
 def item_to_cache(it):
-    return {k: getattr(it, k) for k in ITEM_CACHE_FIELDS}
+    fields = ("kind_slug", "allocine_id", "title", "url_path", "rating_xx", "rating")
+    return {k: getattr(it, k) for k in fields}
 
 
 @dataclass
@@ -501,7 +495,6 @@ class Item:
     imdb_title: str | None = None
     imdb_year: int | None = None
     status: str = "pending"
-    error: str | None = None
     candidates: list = field(default_factory=list)
     tmdb_outcome: str | None = None   # confirm / mismatch / neutral / error
     cross_validated: bool = False
@@ -691,29 +684,35 @@ def extract_original_title(html):
 
 
 def enrich_item(session, item, cache_dir, delay):
+    """Fiche Allociné (année, titre original, crédits) en un seul fetch, cache `detail/`."""
     cpath = cache_dir / "detail" / f"{item.cache_key}.json"
-    if cpath.exists():
-        d = json.loads(cpath.read_text(encoding="utf-8"))
-        if d.get("not_found"):
+    d = load_json(cpath, {})
+    if d.get("not_found"):
+        return
+    if not cpath.exists():
+        time.sleep(delay)
+        r = http_get(session, item.allocine_url, not_found_ok=True)
+        if r is None:
+            item.status = "detail_error"
+            save_json(cpath, {"not_found": True})
             return
-        item.year = d.get("year")
-        item.original_title = d.get("original_title")
-        return
-    time.sleep(delay)
-    r = http_get(session, item.allocine_url, not_found_ok=True)
-    if r is None:
-        item.status = "detail_error"
-        item.error = "fiche 404"
-        cpath.write_text(json.dumps({"not_found": True}), encoding="utf-8")
-        return
-    soup = BeautifulSoup(r.text, PARSER)
-    title_tag = soup.title.string if soup.title and soup.title.string else ""
-    item.year = extract_year(title_tag)
-    item.original_title = extract_original_title(r.text)
-    cpath.write_text(
-        json.dumps({"year": item.year, "original_title": item.original_title}, ensure_ascii=False),
-        encoding="utf-8",
-    )
+        soup = BeautifulSoup(r.text, PARSER)
+        title_tag = soup.title.string if soup.title and soup.title.string else ""
+        minutes, actors, directors = extract_credits(r.text)
+        d = {
+            "year": extract_year(title_tag),
+            "original_title": extract_original_title(r.text),
+            "credits_checked": True,
+            "duration_min": minutes,
+            "actors": actors,
+            "director": directors,
+        }
+        save_json(cpath, d)
+    item.year = d.get("year")
+    item.original_title = d.get("original_title")
+    item.duration_min = d.get("duration_min")
+    item.actors = d.get("actors")
+    item.director = d.get("director")
 
 
 def imdb_suggest(session, query):
@@ -767,9 +766,8 @@ def resolve_item(session, item, imdb_cache, imdb_cache_path, delay_imdb, overrid
                     break
                 if len(ym) > 1:
                     ambiguous = True
-    except (requests.RequestException, ValueError) as e:
+    except (requests.RequestException, ValueError):
         item.status = "imdb_error"
-        item.error = repr(e)
         return
 
     if not resolved:
@@ -850,7 +848,7 @@ def tmdb_get(session, key, path, params):
             else:
                 return r.json()
         time.sleep(1.0 * (attempt + 1))
-    raise TmdbError(f"TMDB échec après 3 tentatives : {path} ({last})")
+    raise requests.RequestException(f"TMDB échec après 3 tentatives : {path} ({last})")
 
 
 def _tmdb_search_fields(item):
@@ -883,11 +881,15 @@ def tmdb_external_imdb(session, key, tmdb_id, kind_slug, delay):
     return (tmdb_get(session, key, path, {}) or {}).get("imdb_id")
 
 
-def _tmdb_pick(results, nq, year):
-    exact = [
+def exact_title_matches(results, nq):
+    return [
         r for r in results
         if normalize_title(r["title"]) == nq or normalize_title(r["orig"]) == nq
     ]
+
+
+def _tmdb_pick(results, nq, year):
+    exact = exact_title_matches(results, nq)
     if year:
         ym = [r for r in exact if r["year"] == year]
         if len(ym) == 1:
@@ -925,10 +927,7 @@ def tmdb_check_item(session, key, item, delay):
     for q in item.query_candidates():
         nq = normalize_title(q)
         results = tmdb_search(session, key, item, q, bool(item.year), delay)
-        exact = [
-            r for r in results
-            if normalize_title(r["title"]) == nq or normalize_title(r["orig"]) == nq
-        ]
+        exact = exact_title_matches(results, nq)
         ym = [r for r in exact if item.year and r["year"] == item.year]
         if len(ym) == 1:
             imdb = tmdb_external_imdb(session, key, ym[0]["id"], item.kind_slug, delay)
@@ -939,10 +938,7 @@ def tmdb_check_item(session, key, item, delay):
             return "neutral", None
         if item.year and not exact:
             results = tmdb_search(session, key, item, q, False, delay)
-            exact = [
-                r for r in results
-                if normalize_title(r["title"]) == nq or normalize_title(r["orig"]) == nq
-            ]
+            exact = exact_title_matches(results, nq)
             if len(exact) == 1:
                 imdb = tmdb_external_imdb(session, key, exact[0]["id"], item.kind_slug, delay)
                 if not imdb:
@@ -1061,25 +1057,23 @@ def extract_credits(html):
 
 
 def enrich_allocine_full(session, item, cache_dir, delay):
-    """Complète durée/acteurs/réalisateur (JSON-LD). Re-fetch uniquement si absents du cache."""
+    """Crédits depuis `detail/` ; fetch de secours pour les caches antérieurs sans crédits."""
     cpath = cache_dir / "detail" / f"{item.cache_key}.json"
     d = load_json(cpath, {})
     if d.get("not_found"):
         return False
-    if d.get("credits_checked"):
-        item.duration_min = d.get("duration_min")
-        item.actors = d.get("actors")
-        item.director = d.get("director")
-        return bool(item.duration_min or item.actors or item.director)
-    time.sleep(delay)
-    r = http_get(session, item.allocine_url, not_found_ok=True)
-    if r is None:
-        return False
-    minutes, actors, directors = extract_credits(r.text)
-    d.update({"credits_checked": True, "duration_min": minutes, "actors": actors, "director": directors})
-    save_json(cpath, d)
-    item.duration_min, item.actors, item.director = minutes, actors, directors
-    return bool(minutes or actors or directors)
+    if not d.get("credits_checked"):
+        time.sleep(delay)
+        r = http_get(session, item.allocine_url, not_found_ok=True)
+        if r is None:
+            return False
+        minutes, actors, directors = extract_credits(r.text)
+        d.update({"credits_checked": True, "duration_min": minutes, "actors": actors, "director": directors})
+        save_json(cpath, d)
+    item.duration_min = d.get("duration_min")
+    item.actors = d.get("actors")
+    item.director = d.get("director")
+    return bool(item.duration_min or item.actors or item.director)
 
 
 def imdb_candidates_meta(session, item, cache, cache_path, delay_imdb):
@@ -1211,13 +1205,6 @@ def score_candidate(it, cand):
     return s, strong, notes, hard, soft
 
 
-def candidate_score_display(s, strong, notes):
-    parts = [f"score {s} ({strong} fort(s))"]
-    if notes:
-        parts.append(" ; ".join(notes))
-    return " — ".join(parts)
-
-
 def cross_verify_pass(session, items, cache_dir, delay, delay_imdb, tmdb_key, delay_tmdb):
     """Vérifie/arbitre via durée+casting+réalisateur : les items en doute ET l'audit des
     items « sûre » jamais audités (décisions persistées, rejouées à chaque run)."""
@@ -1317,7 +1304,7 @@ def cross_verify_pass(session, items, cache_dir, delay, delay_imdb, tmdb_key, de
         if tmdb_failed or not scored:
             continue
         scored.sort(key=lambda x: -x["score"])
-        best, second = scored[0], (scored[1] if len(scored) > 1 else None)
+        best = scored[0]
 
         if it.imdb_id:
             # vérification du mapping courant
@@ -1463,8 +1450,7 @@ def wikidata_pass(session, items, cache_dir, delay):
                 if len(exact) == 1:
                     found = exact[0]
                     break
-        except requests.RequestException as e:
-            it.error = repr(e)
+        except requests.RequestException:
             continue
         if found:
             it.imdb_id, it.status = found["imdb_id"], "ok_wikidata"
@@ -1479,7 +1465,7 @@ def build_trakt_entries(items, ts):
     entries = []
     seen_index = {}
     for it in items:
-        if not it.imdb_id or it.status.startswith("unresolved") or it.status == "imdb_error":
+        if not it.imdb_id or it.status.startswith("unresolved"):
             continue
         e = {"imdb_id": it.imdb_id, "type": it.kind, "watched_at": ts}
         if it.rating:
@@ -1495,44 +1481,49 @@ def build_trakt_entries(items, ts):
     return entries
 
 
-def write_report(items, path, reviewed_ok):
+def write_csv(path, header, rows):
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
-        w.writerow([
-            "type", "allocine_id", "titre", "titre_original", "annee",
-            "note_allocine_sur5", "note_trakt_sur10", "imdb_id",
-            "titre_imdb", "annee_imdb", "confiance", "statut", "url_allocine",
+        w.writerow(header)
+        w.writerows(rows)
+
+
+def write_report(items, path, reviewed_ok):
+    rows = []
+    for it in items:
+        note_ac = f"{it.rating_xx / 10:.1f}".replace(".", ",") if it.rating_xx is not None else ""
+        rows.append([
+            it.kind, it.allocine_id, it.title, it.original_title or "", it.year or "",
+            note_ac, it.rating or "", it.imdb_id or "",
+            it.imdb_title or "", it.imdb_year or "",
+            confidence_level(it, reviewed_ok), it.status, it.allocine_url,
         ])
-        for it in items:
-            note_ac = f"{it.rating_xx / 10:.1f}".replace(".", ",") if it.rating_xx is not None else ""
-            w.writerow([
-                it.kind, it.allocine_id, it.title, it.original_title or "", it.year or "",
-                note_ac, it.rating or "", it.imdb_id or "",
-                it.imdb_title or "", it.imdb_year or "",
-                confidence_level(it, reviewed_ok), it.status, it.allocine_url,
-            ])
+    write_csv(path, [
+        "type", "allocine_id", "titre", "titre_original", "annee",
+        "note_allocine_sur5", "note_trakt_sur10", "imdb_id",
+        "titre_imdb", "annee_imdb", "confiance", "statut", "url_allocine",
+    ], rows)
 
 
 def write_review_list(items, path, reviewed_ok):
     """CSV des items à valider manuellement, triés par niveau de risque."""
     todo = [it for it in items if needs_review(it, reviewed_ok)]
-    todo.sort(key=lambda it: REVIEW_ORDER.index(it.status) if it.status in REVIEW_ORDER else 99)
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.writer(f, delimiter=";")
-        w.writerow([
-            "type", "titre_allocine", "annee", "note_trakt", "imdb_id",
-            "titre_imdb", "annee_imdb", "statut", "alternatives", "url_allocine",
+    todo.sort(key=review_sort_key)
+    rows = []
+    for it in todo:
+        alts = " | ".join(
+            f"{c['imdb_id']} ({c.get('titre')}, {c.get('annee')}) [{c.get('type_imdb')}]"
+            + (f" {{ {c['signaux']} }}" if c.get("signaux") else "")
+            for c in (it.candidates or [])[:4]
+        )
+        rows.append([
+            it.kind, it.title, it.year or "", it.rating or "", it.imdb_id or "",
+            it.imdb_title or "", it.imdb_year or "", it.status, alts, it.allocine_url,
         ])
-        for it in todo:
-            alts = " | ".join(
-                f"{c['imdb_id']} ({c.get('titre')}, {c.get('annee')}) [{c.get('type_imdb')}]"
-                + (f" {{ {c['signaux']} }}" if c.get("signaux") else "")
-                for c in (it.candidates or [])[:4]
-            )
-            w.writerow([
-                it.kind, it.title, it.year or "", it.rating or "", it.imdb_id or "",
-                it.imdb_title or "", it.imdb_year or "", it.status, alts, it.allocine_url,
-            ])
+    write_csv(path, [
+        "type", "titre_allocine", "annee", "note_trakt", "imdb_id",
+        "titre_imdb", "annee_imdb", "statut", "alternatives", "url_allocine",
+    ], rows)
 
 
 def write_unresolved(items, path):
@@ -1588,8 +1579,8 @@ def parse_args(argv):
     p.add_argument("--delay-imdb", type=float, default=0.3, help="délai entre requêtes IMDb (s)")
     p.add_argument("--output-dir", default=".", help="dossier des sorties")
     p.add_argument("--kinds", default="films,series", help="listes à exporter : films,series")
-    p.add_argument("--max-pages", type=int, default=0, help="limiter le nombre de pages par type (0 = tout)")
-    p.add_argument("--limit", type=int, default=0, help="limiter le nombre d'items traités (0 = tout)")
+    p.add_argument("--max-pages", type=int, default=0, help="debug : limiter le nombre de pages par type (0 = tout)")
+    p.add_argument("--limit", type=int, default=0, help="debug : limiter le nombre d'items traités (0 = tout ; export partiel possible)")
     p.add_argument("--overrides", default=None, help="JSON de mappings manuels (créé automatiquement s'il manque)")
     p.add_argument("--tmdb-key", default=None, help="clé API TMDB (v3) : chaîne, chemin de fichier, ou TMDB_API_KEY dans .env")
     p.add_argument("--delay-tmdb", type=float, default=0.25, help="délai entre requêtes TMDB (s)")
@@ -1620,7 +1611,11 @@ def main(argv=None):
         return 1
     ts = f"{date_str}T12:00:00Z"
 
-    kinds = [k.strip() for k in args.kinds.split(",") if k.strip() in KINDS]
+    requested = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    ignored = [k for k in requested if k not in KINDS]
+    if ignored:
+        log(f"Attention : --kinds ignoré pour {', '.join(ignored)} (valeurs possibles : films, series)")
+    kinds = [k for k in requested if k in KINDS]
     if not kinds:
         log(f"Erreur : --kinds invalide {args.kinds!r}")
         return 1
@@ -1638,12 +1633,23 @@ def main(argv=None):
         save_json(overrides_path, overrides, indent=2)
         log(f"Fichier de mappings créé : {overrides_path}")
 
-    imdb_cache = {}
-    if imdb_cache_path.is_file():
-        imdb_cache = json.loads(imdb_cache_path.read_text(encoding="utf-8"))
+    imdb_cache = load_json(imdb_cache_path, {})
     if args.retry_unresolved:
-        for k in [k for k, v in imdb_cache.items() if str(v.get("status", "")).startswith("unresolved")]:
+        stale = [k for k, v in imdb_cache.items() if str(v.get("status", "")).startswith("unresolved")]
+        for k in stale:
             del imdb_cache[k]
+        if stale:
+            save_json(imdb_cache_path, imdb_cache)
+        for name in ("tmdb.json", "cross.json"):
+            path = cache_dir / name
+            data = load_json(path, {})
+            removed = 0
+            for k in stale:
+                if data.pop(k, None) is not None:
+                    removed += 1
+            if removed:
+                save_json(path, data)
+        log(f"--retry-unresolved : {len(stale)} clé(s) purgée(s) de imdb.json, tmdb.json, cross.json")
 
     session = make_session()
 
@@ -1668,6 +1674,7 @@ def main(argv=None):
 
     if args.limit:
         items = items[: args.limit]
+        log(f"Attention : --limit={args.limit} → run partiel sur {len(items)} item(s) ; le cache des items reste complet.")
 
     review_decisions = load_json(cache_dir / "review-ok.json", {})
     for it in items:
@@ -1678,15 +1685,14 @@ def main(argv=None):
             it.reviewed = True
 
     n = len(items)
-    log(f"\nPhase 1/5 — résolution locale de {n} item(s) (cache réutilisé quand disponible)")
+    log(f"\nPhase 1/5 — fiches Allociné et résolution IMDb de {n} item(s) (cache réutilisé quand disponible)")
     for i, it in enumerate(items, 1):
         if it.status == "excluded":
             continue
         try:
             enrich_item(session, it, cache_dir, args.delay)
-        except (requests.RequestException, RuntimeError) as e:
+        except (requests.RequestException, RuntimeError):
             it.status = "detail_error"
-            it.error = repr(e)
         resolve_item(session, it, imdb_cache, imdb_cache_path, args.delay_imdb, overrides)
         if i % 25 == 0 or i == n:
             log(f"[{i}/{n}] traités — statuts : {dict(Counter(x.status for x in items))}")
@@ -1729,9 +1735,8 @@ def main(argv=None):
                 continue
             try:
                 imdb, st, ttitle, tyear = tmdb_resolve_item(session, tmdb_key, it, args.delay_tmdb)
-            except (TmdbAuthError, requests.RequestException) as e:
+            except (TmdbAuthError, requests.RequestException):
                 it.status = "tmdb_error"
-                it.error = repr(e)
                 continue
             if imdb:
                 it.imdb_id, it.status = imdb, st
@@ -1758,8 +1763,7 @@ def main(argv=None):
                 if outcome is None or (outcome == "mismatch" and not tmdb_imdb):
                     try:
                         outcome, tmdb_imdb = tmdb_check_item(session, tmdb_key, it, args.delay_tmdb)
-                    except (TmdbAuthError, requests.RequestException) as e:
-                        it.error = repr(e)
+                    except (TmdbAuthError, requests.RequestException):
                         outcome, tmdb_imdb = "error", None
                     if outcome != "error":
                         tmdb_cache[it.cache_key] = {"check": outcome, "tmdb_imdb": tmdb_imdb}

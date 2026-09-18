@@ -34,11 +34,11 @@ Single-script tool: exports a public Allociné profile's movie/series ratings in
 | `wikidata.json` | last-resort P345 resolutions |
 | `review-ok.json` | human decisions (`validated` / `exclude`) |
 
-Deleting a cache changes outcomes. The scoring engine caches are: `imdbcands.json`, `tmdbmeta.json`, `cross.json` (purge these, not `imdb.json`, to re-arbitrate).
+Deleting a cache changes outcomes. The scoring engine caches are: `imdbcands.json`, `tmdbmeta.json`, `cross.json` (purge these, not `imdb.json`, to re-arbitrate). `--retry-unresolved` drops `unresolved_*` keys from `imdb.json`, `tmdb.json` and `cross.json` (persisted immediately).
 
 ## Decision rules (conservative, by design)
 
-- Auto-apply a mapping only with ≥2 strong signals (runtime within ±2 min **for movies only**, ≥2 shared actors, same director) or margin ≥3 over a disqualified incumbent; never on a single weak signal.
+- Auto-apply a mapping only with ≥2 strong signals (runtime within ±2 min **for movies only**, ≥2 shared actors, same director) **and** a clear margin (≥3 over a disqualified incumbent, ≥4 between unresolved candidates); never on a single weak signal.
 - Year Δ>1 is a **hard conflict for shows** (avoids remapping a later series to an earlier one with a similar title) but only a soft note for movies (French re-releases sometimes append a new year to the original title).
 - Runtime mismatch is a **soft** conflict (TMDB runtimes are sometimes wrong); don't let one block a replace backed by 4 actors + director. Casting disjoint is **hard** — but beware name-order artifacts (see below).
 - Person matching handles Korean/Japanese order flips: Allociné westernizes ("Jun-yeol Ryu"), TMDB/IMDb don't ("Ryu Jun-yeol") — `person_variants` adds a token-sorted variant for this. Without it, Asian shows get false "casting disjoint".

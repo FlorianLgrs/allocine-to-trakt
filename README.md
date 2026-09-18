@@ -60,6 +60,11 @@ Les décisions sont persistées (`cache/review-ok.json`, remplacements dans `ove
 | `--delay` / `--delay-imdb` / `--delay-tmdb` | 1,2 / 0,3 / 0,25 s | délais anti-429 (relances automatiques avec backoff) |
 | `--kinds films,series` | les deux | listes à exporter |
 | `--overrides` | — | fichier de mappings manuels, prioritaires sur tout |
+| `--tmdb-key` | `.env` | clé API TMDB (chaîne, chemin de fichier, ou `TMDB_API_KEY`) |
+| `--output-dir` | `.` | dossier des sorties et du cache |
+| `--no-tmdb-check` | — | désactiver la contre-vérification TMDB (fallback seul) |
+| `--retry-unresolved` | — | purger les échecs des caches (`imdb.json`, `tmdb.json`, `cross.json`) pour les retenter |
+| `--max-pages` / `--limit` | 0 | outils de debug : limiter les pages/l'items traités (un `--limit` produit un export partiel) |
 
 La clé TMDB est facultative mais améliore le matching. Copiez `.env.example` vers `.env` et renseignez-la, ou laissez l'assistant vous la demander :
 
@@ -78,13 +83,15 @@ Aucune autre clé n'est nécessaire (IMDb et Wikidata sont publics).
 | `review.csv` | uniquement les items en doute, triés par risque |
 | `unresolved.json` | détail des items sans mapping retenu (candidats, raison) |
 
-Le cache vit dans `cache/` (profil, fiches, résolutions IMDb/TMDB, décisions d'arbitrage). Les décisions sont sauvegardées progressivement : une interruption permet de reprendre. Supprimer un fichier de cache change les décisions, voir `AGENTS.md`.
+Le cache vit dans `cache/` (profil, fiches, résolutions IMDb/TMDB, décisions d'arbitrage). Les décisions sont sauvegardées progressivement : une interruption permet de reprendre. Supprimer un fichier de cache change les décisions, voir `AGENTS.md`. Après des échecs réseau, `--retry-unresolved` purge les clés en échec d'`imdb.json`, `tmdb.json` et `cross.json`.
 
 ## Modèle de confiance
 
 | Niveau | Signification |
 |---|---|
 | **sûre** | titre exact + année exacte sur IMDb, **ou** confirmation croisée indépendante (durée ±2 min, ≥2 acteurs communs ou même réalisateur), ou validation manuelle |
+| **validée** | mapping conservé après validation humaine en revue (`--review`, décision dans `cache/review-ok.json`) |
+| **exclue** | item retiré volontairement de l'import lors de la revue |
 | **à vérifier** | correspondance plus faible (année seule, année ±1, Wikidata seul…) → à trancher via `--review` |
 | **hors import** | divergences non départagées ou titres absents d'IMDb — exclus du JSON d'import |
 
@@ -99,7 +106,7 @@ La passe de croisement ne vérifie pas seulement les items en doute : elle audit
 - Les séries sont importées au niveau « show » (AlloCiné ne note pas les épisodes)
 - Les notes sans date : toutes les dates valent `--date` (pas de date de note sur AlloCiné)
 - Les items absents d'IMDb restent hors import (`unresolved.json`), l'import Trakt exigeant un `imdb_id`
-- Le DOM d'AlloCiné peut changer : `--review` et les caches facilitent l'ajustement des sélecteurs
+- Le DOM d'AlloCiné peut changer : en cas de casse, adaptez les sélecteurs puis relancez avec `--refresh-scrape` + purge de `cache/detail/` (les caches stockent du parsé, pas le HTML)
 - Le premier audit complet est long (durée variable selon la taille du profil et la vitesse des services) ; les runs suivants sont rapides grâce au cache
 
 ## Avertissement légal
